@@ -8,11 +8,13 @@ pub fn build(b: *std.Build) !void {
 
     const dvui_sdl = addDvuiModule(b, target, optimize, .sdl);
     const dvui_raylib = addDvuiModule(b, target, optimize, .raylib);
+    const dvui_win32 = addDvuiModule(b, target, optimize, .win32);
 
     addExample(b, target, optimize, "sdl-standalone", dvui_sdl);
     addExample(b, target, optimize, "sdl-ontop", dvui_sdl);
     addExample(b, target, optimize, "raylib-standalone", dvui_raylib);
     addExample(b, target, optimize, "raylib-ontop", dvui_raylib);
+    addExample(b, target, optimize, "win32-standalone", dvui_win32);
 
     // web test
     {
@@ -94,6 +96,7 @@ pub fn build(b: *std.Build) !void {
 const Backend = enum {
     raylib,
     sdl,
+    win32,
 };
 
 fn addDvuiModule(
@@ -119,6 +122,7 @@ fn addDvuiModule(
         .link_libc = switch (backend) {
             .raylib => true,
             .sdl => true,
+            .win32 => false,
         },
     });
     backend_mod.addImport("dvui", dvui_mod);
@@ -159,6 +163,11 @@ fn addDvuiModule(
                 if (sdl_dep) |sd| {
                     backend_mod.linkLibrary(sd.artifact("SDL2"));
                 }
+            }
+        },
+        .win32 => {
+            if (b.lazyDependency("win32", .{})) |win32_dep| {
+                backend_mod.addImport("win32", win32_dep.module("zigwin32"));
             }
         },
     }
