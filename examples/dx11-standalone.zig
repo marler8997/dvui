@@ -1,14 +1,7 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const Backend = dvui.backend;
-comptime {
-    std.debug.assert(@hasDecl(Backend, "Dx11Backend"));
-}
-
-const w = std.os.windows;
-const HINSTANCE = w.HINSTANCE;
-const LPWSTR = w.LPWSTR;
-const INT = w.INT;
+const win32 = Backend.win32;
 
 const window_icon_png = @embedFile("zig-favicon.png");
 
@@ -19,63 +12,78 @@ const vsync = true;
 
 var show_dialog_outside_frame: bool = false;
 
+pub const panic = win32.messageBoxThenPanic(.{ .title = "Dx11 Standalone Panic!" });
+
 /// This example shows how to use the dvui for a normal application:
 /// - dvui renders the whole application
 /// - render frames only when needed
 pub export fn main(
-    instance: HINSTANCE,
-    _: ?HINSTANCE,
-    _: ?LPWSTR,
-    cmd_show: INT,
+    _: win32.HINSTANCE,
+    _: ?win32.HINSTANCE,
+    _: [*:0]u16,
+    _: c_int,
 ) void {
     defer _ = gpa_instance.deinit();
+    return main2() catch |e| {
+        if (@errorReturnTrace()) |trace| {
+            std.debug.dumpStackTrace(trace.*);
+        }
+        std.debug.panic("{s}", .{@errorName(e)});
+    };
+}
+fn main2() !void {
+    const d3d, const debug = Backend.D3d.init(.{});
+    _ = debug;
 
-    // init dx11 backend (creates and owns OS window)
-    var backend = Backend.initWindow(instance, cmd_show, .{
-        .allocator = gpa,
-        .size = .{ .w = 800.0, .h = 600.0 },
-        .min_size = .{ .w = 250.0, .h = 350.0 },
+    const class = win32.L("Dx11MainWnd");
+    Backend.RegisterClass(class, .{
+        .style = .{ .DBLCLKS = 1 },
+        .cursor = win32.LoadCursorW(null, win32.IDC_ARROW),
+    }) catch win32.panicWin32("RegisterClass", win32.GetLastError());
+
+    const dpi = win32.GetDpiForSystem();
+    var window_state: Backend.WindowState = undefined;
+    const hwnd = Backend.CreateWindow(@src(), gpa, &d3d, class, &callback, &window_state, .{
         .vsync = vsync,
-        .title = "DVUI DX11 Standalone Example",
-        .icon = window_icon_png, // can also call setIconFromFileContent()
-    }) catch return;
-    defer backend.deinit();
+        .style = win32.WS_OVERLAPPEDWINDOW,
+        .title = win32.L("DVUI DX11 Standalone Example"),
+        .width = win32.scaleDpi(i32, 800, dpi),
+        .height = win32.scaleDpi(i32, 600, dpi),
+    }) catch |err| switch (err) {
+        error.Win32 => win32.panicWin32("CreateWindow", win32.GetLastError()),
+        else => |e| return e,
+    };
+    // .min_size = .{ .w = 250.0, .h = 350.0 },
+    // .icon = window_icon_png, // can also call setIconFromFileContent()
 
-    Backend.setBackend(&backend);
+    _ = win32.ShowWindow(hwnd, .{ .SHOWNORMAL = 1 });
 
-    // init dvui Window (maps onto a single OS window)
-    var win = dvui.Window.init(@src(), gpa, backend.backend(), .{}) catch return;
-    defer win.deinit();
+    var msg: win32.MSG = undefined;
+    while (win32.GetMessageW(&msg, null, 0, 0) != 0) {
+        _ = win32.TranslateMessage(&msg);
+        _ = win32.DispatchMessageW(&msg);
+    }
+}
 
-    Backend.setWindow(&win);
+fn callback(context: Backend.CallbackContext, win: *dvui.Window) anyerror!void {
+    switch (context) {
+        .ready => {
+            const nstime = win.beginWait(true);
+            try win.begin(nstime);
+            try gui_frame();
+            _ = try win.end(.{});
+            // // cursor management
+            // backend.setCursor(win.cursorRequested());
 
-    main_loop: while (true) {
-        // This handles the main windows events
-        if (Backend.isExitRequested()) {
-            break :main_loop;
-        }
-
-        // beginWait coordinates with waitTime below to run frames only when needed
-        const nstime = win.beginWait(backend.hasEvent());
-
-        // marks the beginning of a frame for dvui, can call dvui functions after this
-        win.begin(nstime) catch {};
-
-        // both dvui and dx11 drawing
-        gui_frame() catch {};
-
-        // marks end of dvui frame, don't call dvui functions after this
-        // - sends all dvui stuff to backend for rendering, must be called before renderPresent()
-        _ = win.end(.{}) catch continue;
-
-        // cursor management
-        backend.setCursor(win.cursorRequested());
-
-        // Example of how to show a dialog from another thread (outside of win.begin/win.end)
-        if (show_dialog_outside_frame) {
-            show_dialog_outside_frame = false;
-            dvui.dialog(@src(), .{ .window = &win, .modal = false, .title = "Dialog from Outside", .message = "This is a non modal dialog that was created outside win.begin()/win.end(), usually from another thread." }) catch {};
-        }
+            // // Example of how to show a dialog from another thread (outside of win.begin/win.end)
+            // if (show_dialog_outside_frame) {
+            //     show_dialog_outside_frame = false;
+            //     dvui.dialog(@src(), .{ .window = &win, .modal = false, .title = "Dialog from Outside", .message = "This is a non modal dialog that was created outside win.begin()/win.end(), usually from another thread." }) catch {};
+            // }
+        },
+        .destroy => {
+            win32.PostQuitMessage(0);
+        },
     }
 }
 
